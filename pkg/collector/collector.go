@@ -19,11 +19,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/r3kzi/clamav-prometheus-exporter/pkg/clamav"
 	"github.com/r3kzi/clamav-prometheus-exporter/pkg/commands"
-	// "log"
 	"regexp"
 	"strconv"
 	log "github.com/sirupsen/logrus"
-	// "fmt"
 )
 
 //Collector satisfies prometheus.Collector interface
@@ -55,8 +53,8 @@ func New(client clamav.Client) *Collector {
 		memMmap:     prometheus.NewDesc("clamav_mem_mmap", "Shows mmap memory usage", nil, nil),
 		memUsed:     prometheus.NewDesc("clamav_mem_used", "Shows used memory usage", nil, nil),
 		buildInfo:   prometheus.NewDesc("clamav_build_info", "Shows ClamAV Build Info", []string{"clamav_version", "database_version"}, nil),
-		poolsUsed:   prometheus.NewDesc("clamav_pools_used", "Shows pools usage memory", nil, nil),
-		poolsTotal:  prometheus.NewDesc("clamav_pools_total", "Shows pools total memory", nil, nil),
+		poolsUsed:   prometheus.NewDesc("clamav_pools_used_mb", "Shows pools usage memory in Mb", nil, nil),
+		poolsTotal:  prometheus.NewDesc("clamav_pools_total_mb", "Shows pools total memory in Mb", nil, nil),
 	}
 }
 
@@ -89,6 +87,7 @@ func (collector *Collector) Collect(ch chan<- prometheus.Metric) {
 		}
 		return float
 	}
+// example of output	
 /*
 echo -n  -e 'zSTATS\0' | nc 127.0.0.1 3310
 POOLS: 1
@@ -111,25 +110,42 @@ MEMSTATS: heap N/A mmap N/A used N/A free N/A releasable N/A pools 1 pools_used 
 END
 */
 	stats := collector.client.Dial(commands.STATS)
-	regex := regexp.MustCompile("([0-9.]+)")
-	log.Info("Stats: " + string(stats))
+	log.Debug("Stats: " + string(stats))
+
+	// THREADS:
+	regex := regexp.MustCompile("THREADS: live ([0-9]+)  idle ([0-9]+) max ([0-9]+) ")
 	matches := regex.FindAllStringSubmatch(string(stats), -1)
-	log.Info("Stats: " + string(len(matches)))
 	if len(matches) > 0 {
-		// this is very bad way to parce data
-		// sometimes it could try to convert IP to float and crashes
-		// ch <- prometheus.MustNewConstMetric(collector.threadsLive, prometheus.CounterValue, float(matches[1][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.threadsIdle, prometheus.CounterValue, float(matches[2][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.threadsMax, prometheus.CounterValue, float(matches[3][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.queue, prometheus.CounterValue, float(matches[5][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.memHeap, prometheus.GaugeValue, float(matches[7][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.memMmap, prometheus.GaugeValue, float(matches[8][1]))
-		// ch <- prometheus.MustNewConstMetric(collector.memUsed, prometheus.GaugeValue, float(matches[9][1]))
+		ch <- prometheus.MustNewConstMetric(collector.threadsLive, prometheus.GaugeValue, float(matches[0][1]))
+		ch <- prometheus.MustNewConstMetric(collector.threadsIdle, prometheus.GaugeValue, float(matches[0][2]))
+		ch <- prometheus.MustNewConstMetric(collector.threadsMax, prometheus.GaugeValue, float(matches[0][3]))
 	}
-	regex = regexp.MustCompile("pools_used ([0-9.]+)M")
+
+	// QUEUE:
+	regex = regexp.MustCompile("QUEUE:: ([0-9]+) items")
 	matches  = regex.FindAllStringSubmatch(string(stats), -1)
 	if len(matches) > 0 {
-		ch <- prometheus.MustNewConstMetric(collector.poolsUsed, prometheus.GaugeValue, float(matches[0][1]))		
+		ch <- prometheus.MustNewConstMetric(collector.queue, prometheus.GaugeValue, float(matches[0][1]))
+	}
+
+	// MEMSTATS:
+	regex = regexp.MustCompile("MEMSTATS: heap (N/A|[0-9]+) mmap (N/A|[0-9]+) used (N/A|[0-9]+) free (N/A|[0-9]+) releasable (N/A|[0-9]+) pools ([0-9]+) pools_used ([0-9.]+)M pools_total ([0-9.]+)M")
+	matches  = regex.FindAllStringSubmatch(string(stats), -1)
+	if len(matches) > 0 {
+		// for i := 0; i < len(matches[0]); i++ {
+		// 	log.Info("MEMSTATS: " + string(matches[0][i]))
+		// }
+		if matches[0][1] != "N/A"{
+			ch <- prometheus.MustNewConstMetric(collector.memHeap, prometheus.GaugeValue, float(matches[0][1]))
+		}
+		if matches[0][2] != "N/A"{
+			ch <- prometheus.MustNewConstMetric(collector.memMmap, prometheus.GaugeValue, float(matches[0][2]))
+		}
+		if matches[0][3] != "N/A"{
+			ch <- prometheus.MustNewConstMetric(collector.memUsed, prometheus.GaugeValue, float(matches[0][3]))
+		}
+		ch <- prometheus.MustNewConstMetric(collector.poolsUsed, prometheus.GaugeValue, float(matches[0][7]))
+		ch <- prometheus.MustNewConstMetric(collector.poolsTotal, prometheus.GaugeValue, float(matches[0][8]))
 	}
 
 	
